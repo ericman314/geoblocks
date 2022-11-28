@@ -40,10 +40,11 @@ const TrapezoidVertexList = [
   { x: -SIDE, y: SIDE * Math.sqrt(3) / 4 },
   { x: -SIDE / 2, y: -SIDE * Math.sqrt(3) / 4 },
   { x: SIDE / 2, y: -SIDE * Math.sqrt(3) / 4 },
-  { x: SIDE, y: SIDE * Math.sqrt(3) / 4 }
+  { x: SIDE, y: SIDE * Math.sqrt(3) / 4 },
+  { x: 0, y: SIDE * Math.sqrt(3) / 4 },
 ]
 
-class Shape {
+export class Shape {
   type: string
   id: string
   color: string
@@ -64,6 +65,12 @@ class Shape {
     this.color = 'black'
     this.vertexList = []
     this.maxDistanceSquaredFromCenter = 0
+  }
+
+  clone() {
+    let clone = new (this.constructor as any)(this.position, this.rotation)
+    clone.color = this.color
+    return clone
   }
 
   computeMaxDistanceFromCenter() {
@@ -107,7 +114,6 @@ class Shape {
     return inside
   }
 
-
   render(ctx: CanvasRenderingContext2D, hover?: boolean) {
     ctx.save()
     ctx.translate(this.position.x, this.position.y)
@@ -124,6 +130,15 @@ class Shape {
     ctx.fill()
     ctx.stroke()
     ctx.restore()
+  }
+
+  toJSON() {
+    return {
+      type: this.type,
+      color: this.color,
+      position: this.position,
+      rotation: this.rotation
+    }
   }
 }
 
@@ -197,4 +212,24 @@ export class TrapezoidShape extends Shape {
     // Equilateral hexagon with origin at center
     this.vertexList = TrapezoidVertexList
   }
+}
+
+export function reviver(key: string, value: any) {
+  if (value && value.type) {
+    switch (value.type) {
+      case 'square':
+        return Object.assign(new SquareShape(value.position, value.rotation), value)
+      case 'triangle':
+        return Object.assign(new TriangleShape(value.position, value.rotation), value)
+      case 'hexagon':
+        return Object.assign(new HexagonShape(value.position, value.rotation), value)
+      case 'fatRhombus':
+        return Object.assign(new FatRhombusShape(value.position, value.rotation), value)
+      case 'skinnyRhombus':
+        return Object.assign(new SkinnyRhombusShape(value.position, value.rotation), value)
+      case 'trapezoid':
+        return Object.assign(new TrapezoidShape(value.position, value.rotation), value)
+    }
+  }
+  return value
 }
