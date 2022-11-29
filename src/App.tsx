@@ -3,6 +3,19 @@ import './App.css'
 import { render } from './render'
 import { SquareShape, TriangleShape, HexagonShape, FatRhombusShape, SkinnyRhombusShape, TrapezoidShape, Shape, reviver } from './Shape'
 
+type Match = {
+  fixed: {
+    shape: Shape,
+    point: { x: number, y: number },
+    normal: { x: number, y: number }
+  },
+  moving: {
+    shape: Shape,
+    point: { x: number, y: number },
+    normal: { x: number, y: number }
+  }
+}
+
 function getPaletteShapes() {
   return [
     new SquareShape({ x: 120, y: 100 }, 0),
@@ -24,10 +37,12 @@ function App() {
 
   const isDragging = useRef(false)
   const draggingShape = useRef<null | Shape>(null)
-  const draggingShapeOriginalPosition = useRef<null | { x: number, y: number }>(null)
+  const draggingShapeGrabLocal = useRef<null | { x: number, y: number }>(null)
 
   const paletteShapes = useRef<Shape[]>(getPaletteShapes())
   const shapes = useRef<Shape[]>(localStorage.getItem('shapes') ? JSON.parse(localStorage.getItem('shapes')!, reviver) : [])
+
+  const closestMatch = useRef<null | Match>(null)
 
   const hoverShape = useRef<Shape | null>(null)
 
@@ -45,7 +60,7 @@ function App() {
             draggingShape.current != null
             && shapes.current.includes(draggingShape.current)
             && mousePosition.current != null
-            && mousePosition.current.x < 240,
+            && mousePosition.current.x < 240
         })
       }
     }
@@ -94,9 +109,10 @@ function App() {
       shapeIndex = shapes.current.findIndex(shape => shape === mouseDownShape.current)
       shape = shapes.current[shapeIndex]
     }
-    if (shape) {
+    if (shape && mouseDownPosition.current) {
       draggingShape.current = shape
-      draggingShapeOriginalPosition.current = { ...shape.position }
+
+      draggingShapeGrabLocal.current = shape.toLocalPoint(mouseDownPosition.current)
       if (shapeIndex !== -1) {
         // Move shape to end of array so it renders on top
         shapes.current.push(...shapes.current.splice(shapeIndex, 1))
@@ -112,10 +128,36 @@ function App() {
       throw new Error('mouseDownPosition or mousePosition is null')
     }
     let needsRender = false
-    if (isDragging.current && draggingShape.current && draggingShapeOriginalPosition.current) {
+    if (isDragging.current && draggingShape.current && draggingShapeGrabLocal.current) {
       // console.log('Dragging a shape')
-      draggingShape.current.position.x = draggingShapeOriginalPosition.current.x + mousePosition.current.x - mouseDownPosition.current.x
-      draggingShape.current.position.y = draggingShapeOriginalPosition.current.y + mousePosition.current.y - mouseDownPosition.current.y
+
+      // Move shape to follow mouse
+
+      let grabWorld = draggingShape.current.toWorldPoint(draggingShapeGrabLocal.current)
+      let deltaWorld = {
+        x: mousePosition.current.x - grabWorld.x,
+        y: mousePosition.current.y - grabWorld.y
+      }
+      let grabMoment = {
+        x: grabWorld.x - draggingShape.current.position.x,
+        y: grabWorld.y - draggingShape.current.position.y
+      }
+      // delta cross grabMoment
+      let cross = (deltaWorld.x * grabMoment.y - deltaWorld.y * grabMoment.x) / draggingShape.current.maxDistanceSquaredFromCenter
+      draggingShape.current.rotation += -cross
+
+      // After adjusting rotation, update deltaWorld
+      grabWorld = draggingShape.current.toWorldPoint(draggingShapeGrabLocal.current)
+      deltaWorld = {
+        x: mousePosition.current.x - grabWorld.x,
+        y: mousePosition.current.y - grabWorld.y
+      }
+
+      draggingShape.current.position.x += deltaWorld.x
+      draggingShape.current.position.y += deltaWorld.y
+
+      closestMatch.current = getClosestMatch(draggingShape.current, shapes.current)
+
       needsRender = true
     }
 
@@ -128,6 +170,11 @@ function App() {
     // console.log('handleEndDrag')
 
     if (draggingShape.current && mousePosition.current) {
+
+      if (closestMatch.current) {
+        applyMatchTransform(closestMatch.current)
+      }
+
       // If a shape was dragged onto the palette, remove it from the shapes array
       let shape = shapes.current.find(shape => shape === draggingShape.current)
       if (shape && mousePosition.current.x < 240) {
@@ -151,7 +198,7 @@ function App() {
     // Reset dragging shape
     isDragging.current = false
     draggingShape.current = null
-    draggingShapeOriginalPosition.current = null
+    draggingShapeGrabLocal.current = null
 
     requestAnimationFrame(doRender)
   }, [])
@@ -219,6 +266,108 @@ function App() {
       />
     </div>
   )
+}
+
+
+export function applyMatchTransform(match: Match) {
+
+  let fixedAngle = Math.atan2(match.fixed.normal.y, match.fixed.normal.x)
+  let movingAngle = Math.atan2(-match.moving.normal.y, -match.moving.normal.x)
+  let angleDiff = fixedAngle - movingAngle
+
+  let movingPointLocal = match.moving.shape.toLocalPoint(match.moving.point)
+  match.moving.shape.rotation += angleDiff
+  let movingPointWorld = match.moving.shape.toWorldPoint(movingPointLocal)
+  let fixedPointWorld = match.fixed.point
+
+  let delta = {
+    x: fixedPointWorld.x - movingPointWorld.x,
+    y: fixedPointWorld.y - movingPointWorld.y
+  }
+
+  match.moving.shape.position.x += delta.x
+  match.moving.shape.position.y += delta.y
+
+}
+
+/**
+ * Returns the point and normal of two edges that are closest to each other, in world coordinates.
+ * @param subject 
+ * @param targets 
+ * @returns 
+ */
+function getClosestMatch(subject: Shape, targets: Shape[]) {
+  // Compute closest edge between the shape we are dragging and all other shapes
+  let closestEdgeDistance = Infinity
+  let closest: null | Match = null
+  for (let shape2 of targets) {
+    if (subject === shape2) {
+      continue
+    }
+    for (let i1 = 0; i1 < subject.vertexList.length; i1++) {
+      let p11 = subject.vertexList[i1]
+      let p12 = subject.vertexList[(i1 + 1) % subject.vertexList.length]
+      let p1mid = { x: (p11.x + p12.x) / 2, y: (p11.y + p12.y) / 2 }
+      let p1norm = { x: p12.y - p11.y, y: p11.x - p12.x }
+      let cos1 = Math.cos(subject.rotation)
+      let sin1 = Math.sin(subject.rotation)
+      p1mid = {
+        x: p1mid.x * cos1 - p1mid.y * sin1 + subject.position.x,
+        y: p1mid.x * sin1 + p1mid.y * cos1 + subject.position.y,
+      }
+      p1norm = {
+        x: p1norm.x * cos1 - p1norm.y * sin1,
+        y: p1norm.x * sin1 + p1norm.y * cos1,
+      }
+      let p1normAngle = Math.atan2(p1norm.y, p1norm.x)
+
+      for (let i2 = 0; i2 < shape2.vertexList.length; i2++) {
+        let p21 = shape2.vertexList[i2]
+        let p22 = shape2.vertexList[(i2 + 1) % shape2.vertexList.length]
+        let p2mid = { x: (p21.x + p22.x) / 2, y: (p21.y + p22.y) / 2 }
+        let p2norm = { x: p22.y - p21.y, y: p21.x - p22.x }
+        let cos2 = Math.cos(shape2.rotation)
+        let sin2 = Math.sin(shape2.rotation)
+        p2mid = {
+          x: p2mid.x * cos2 - p2mid.y * sin2 + shape2.position.x,
+          y: p2mid.x * sin2 + p2mid.y * cos2 + shape2.position.y
+        }
+        p2norm = {
+          x: p2norm.x * cos2 - p2norm.y * sin2,
+          y: p2norm.x * sin2 + p2norm.y * cos2,
+        }
+        let p2normAngle = Math.atan2(p2norm.y, p2norm.x)
+
+        let angleDiff = p1normAngle - p2normAngle
+        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2
+        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2
+
+
+        let d2 = (p1mid.x - p2mid.x) ** 2 + (p1mid.y - p2mid.y) ** 2
+        if (d2 < closestEdgeDistance && Math.abs(angleDiff) > 3 * Math.PI / 4) {
+          closestEdgeDistance = d2
+          closest = {
+            fixed: {
+              shape: shape2,
+              point: p2mid,
+              normal: p2norm
+            },
+            moving: {
+              shape: subject,
+              point: p1mid,
+              normal: p1norm
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (closestEdgeDistance < 50 ** 2) {
+    return closest
+  } else {
+    return null
+  }
 }
 
 export default App

@@ -68,7 +68,7 @@ export class Shape {
   }
 
   clone() {
-    let clone = new (this.constructor as any)(this.position, this.rotation)
+    let clone = new (this.constructor as any)({ ...this.position }, this.rotation)
     clone.color = this.color
     return clone
   }
@@ -121,6 +121,7 @@ export class Shape {
     ctx.fillStyle = this.color
     ctx.strokeStyle = hover ? 'white' : 'black'
     ctx.lineWidth = 4
+    ctx.lineJoin = 'round'
     ctx.beginPath()
     ctx.moveTo(this.vertexList[0].x, this.vertexList[0].y)
     this.vertexList.slice(1).forEach(vertex => {
@@ -138,6 +139,26 @@ export class Shape {
       color: this.color,
       position: this.position,
       rotation: this.rotation
+    }
+  }
+
+  toLocalPoint(point: { x: number, y: number }) {
+    let dx = point.x - this.position.x
+    let dy = point.y - this.position.y
+    let cos = Math.cos(this.rotation)
+    let sin = Math.sin(this.rotation)
+    return {
+      x: dx * cos + dy * sin,
+      y: -dx * sin + dy * cos
+    }
+  }
+
+  toWorldPoint(point: { x: number, y: number }) {
+    let cos = Math.cos(this.rotation)
+    let sin = Math.sin(this.rotation)
+    return {
+      x: point.x * cos - point.y * sin + this.position.x,
+      y: point.x * sin + point.y * cos + this.position.y
     }
   }
 }
